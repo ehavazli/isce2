@@ -222,8 +222,8 @@ def readOffset(filename):
     offsets = OffsetField()
     for linex in lines:
         #linexl = re.split('\s+', linex)
-        #detect blank lines with only spaces and tabs
-        if linex.strip() == '':
+        #detect blank lines with only spaces and tabs, lines with invalid numbers
+        if (linex.strip() == '') or ('*' in linex):
             continue
 
         linexl = linex.split()
@@ -626,7 +626,7 @@ def cal_coherence(inf, win=5, edge=0):
 
     if win % 2 != 1:
         raise Exception('window size must be odd!')
-    hwin = np.int(np.around((win - 1) / 2))
+    hwin = int(np.around((win - 1) / 2))
 
     filt = np.ones((win, win))
     amp  = np.absolute(inf)

@@ -211,8 +211,6 @@ class UnwrapComponents(Component):
         '''
         Creates an ENVI style HDR file for use with GDAL API.
         '''
-        import isceobj
-
         tempstring = """ENVI
 description = {{Snaphu connected component file}}
 samples = {0}
@@ -327,7 +325,7 @@ band names = {{component (Band 1) }}
           dst_ds.SetGeoTransform( self.cc_ds.GetGeoTransform() )
           dst_ds.SetProjection( self.cc_ds.GetProjectionRef() )
           dstband = dst_ds.GetRasterBand(1)
-          print('Estimating neighbors of component : %d'%(compNumber))
+          print('Estimating neighbors of component: %d'%(compNumber))
 
           gdal.ComputeProximity(self.ccband, dstband, options, callback = gdal.TermProgress)
           width = self.cc_ds.RasterXSize
@@ -438,10 +436,7 @@ band names = {{component (Band 1) }}
 
 #end class
 if __name__ == "__main__":
-
-    import isceobj
-
     unw = UnwrapComponents()
-    unw.setInpFile('/Users/subrahma/proj/isce/data/filt_topophase.unw.xml')
-    unw.setConnCompFile('/Users/subrahma/proj/isce/data/filt_topophase.unw.conncomp.xml')
+    unw.setInpFile(inpFile)
+    unw.setConnCompFile(ccFile)
     unw.unwrapComponents()

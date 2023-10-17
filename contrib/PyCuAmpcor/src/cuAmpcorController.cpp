@@ -12,6 +12,7 @@
 #include "cudaUtil.h"
 #include "cuAmpcorChunk.h"
 #include "cuAmpcorUtil.h"
+#include <cuda_runtime.h>
 #include <iostream>
 
 // constructor
@@ -102,7 +103,7 @@ void cuAmpcorController::runAmpcor()
         << nChunksDown << " x " << nChunksAcross  << std::endl;
 
     // iterative over chunks down
-    int message_interval = nChunksDown/10;
+    int message_interval = std::max(nChunksDown/10, 1);
     for(int i = 0; i<nChunksDown; i++)
     {
         if(i%message_interval == 0)

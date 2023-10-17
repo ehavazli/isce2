@@ -14,6 +14,7 @@ import isceobj
 import logging
 from isceobj.Constants import SPEED_OF_LIGHT
 from isceobj.TopsProc.runBurstIfg import loadVirtualArray
+from isceobj.Alos2Proc.runIonFilt import reformatMaskedAreas
 
 
 logger = logging.getLogger('isce.topsinsar.ion')
@@ -63,6 +64,7 @@ def setup(self):
     #1: use mean value of a burst
     #2: use full burst
     ionParam.azshiftFlag = 1
+    ionParam.maskedAreas = None
 
     #better NOT try changing the following two parameters, since they are related
     #to the filtering parameters above
@@ -89,6 +91,7 @@ def setup(self):
     ionParam.ionshiftFilteringWinsizeMax = self.ION_ionshiftFilteringWinsizeMax
     ionParam.ionshiftFilteringWinsizeMin = self.ION_ionshiftFilteringWinsizeMin
     ionParam.azshiftFlag = self.ION_azshiftFlag
+    ionParam.maskedAreas = self.ION_maskedAreas
 
     ionParam.numberAzimuthLooks = self.ION_numberAzimuthLooks
     ionParam.numberRangeLooks = self.ION_numberRangeLooks
@@ -257,12 +260,12 @@ def removeHammingWindow(inputfile, outputfile, bandwidth, samplingRate, alpha, v
     #fft length
     nfft = next_pow2(width)
     #Hamming window length
-    nwin = np.int(np.around(bandwidth / samplingRate*nfft))
+    nwin = int(np.around(bandwidth / samplingRate*nfft))
     #make it a even number, since we are going to use even fft length
     nwin = ((nwin+1)//2)*2
     #the starting and ending index of window in the spectrum
-    start = np.int(np.around((nfft - nwin) / 2))
-    end = np.int(np.around(start + nwin - 1))
+    start = int(np.around((nfft - nwin) / 2))
+    end = int(np.around(start + nwin - 1))
     hammingWindow = alpha - (1.0-alpha) * np.cos(np.linspace(-np.pi, np.pi, num=nwin, endpoint=True))
     hammingWindow = 1.0/np.fft.fftshift(hammingWindow)
     spec = np.fft.fft(slc, n=nfft, axis=1)
@@ -384,7 +387,14 @@ def subband(self, ionParam):
     from isceobj.Util.Poly2D import Poly2D
     from contrib.alos2proc.alos2proc import rg_filter
 
-    from isceobj.TopsProc.runFineResamp import resampSecondary
+    # decide whether to use CPU or GPU
+    hasGPU = self.useGPU and self._insar.hasGPU()
+    if hasGPU:
+        from isceobj.TopsProc.runFineResamp import resampSecondaryGPU as resampSecondary
+        print('Using GPU for fineresamp')
+    else:
+        from isceobj.TopsProc.runFineResamp import resampSecondaryCPU as resampSecondary
+
     from isceobj.TopsProc.runFineResamp import getRelativeShifts
     from isceobj.TopsProc.runFineResamp import adjustValidSampleLine
     from isceobj.TopsProc.runFineResamp import getValidLines
@@ -422,8 +432,8 @@ def subband(self, ionParam):
         ##############################################################
         #for resampling
         relShifts = getRelativeShifts(reference, secondary, minBurst, maxBurst, secondaryBurstStart)
-        print('Shifts IW-{0}: '.format(swath), relShifts) 
-   
+        print('Shifts IW-{0}: '.format(swath), relShifts)
+
         ####Can corporate known misregistration here
         apoly = Poly2D()
         apoly.initPoly(rangeOrder=0,azimuthOrder=0,coeffs=[[0.]])
@@ -443,8 +453,8 @@ def subband(self, ionParam):
 
         #only process common bursts
         for ii in range(minBurst, maxBurst):
-            jj = secondaryBurstStart + ii - minBurst 
-    
+            jj = secondaryBurstStart + ii - minBurst
+
             masBurst = reference.bursts[ii]
             slvBurst = secondary.bursts[jj]
 
@@ -467,10 +477,10 @@ def subband(self, ionParam):
                 #removing window
                 rangeSamplingRate = SPEED_OF_LIGHT / (2.0 * burst.rangePixelSize)
                 if burst.rangeWindowType == 'Hamming':
-                    removeHammingWindow(burst.image.filename, tmpFilename, burst.rangeProcessingBandwidth, rangeSamplingRate, burst.rangeWindowCoefficient, virtual=virtual)  
+                    removeHammingWindow(burst.image.filename, tmpFilename, burst.rangeProcessingBandwidth, rangeSamplingRate, burst.rangeWindowCoefficient, virtual=virtual)
                 else:
                     raise Exception('Range weight window type: {} is not supported yet!'.format(burst.rangeWindowType))
-                
+
                 #subband
                 rg_filter(tmpFilename,
                           #burst.numberOfSamples,
@@ -548,7 +558,7 @@ def subband(self, ionParam):
                                              minAz=minAz, maxAz=maxAz,
                                              minRng=minRg, maxRng=maxRg)
                 slvBurstResamp2.image.filename = outimg.filename
-                
+
                 #forming interferogram
                 referencename = masBurst2.image.filename
                 secondaryname = slvBurstResamp2.image.filename
@@ -639,7 +649,7 @@ def cal_coherence(inf, win=5, edge=0):
 
     if win % 2 != 1:
         raise Exception('window size must be odd!')
-    hwin = np.int(np.around((win - 1) / 2))
+    hwin = int(np.around((win - 1) / 2))
 
     filt = np.ones((win, win))
     amp  = np.absolute(inf)
@@ -833,13 +843,13 @@ def snaphuUnwrap(self, xmlDirname, wrapName, corrfile, unwrapName, nrlks, nalks,
         ifg = self._insar.loadProduct( os.path.join(xmlDirname, 'IW{0}.xml'.format(swath)))
         wavelength = ifg.bursts[0].radarWavelength
 
-        ####tmid 
+        ####tmid
         tstart = ifg.bursts[0].sensingStart
         tend   = ifg.bursts[-1].sensingStop
         tmid = tstart + 0.5*(tend - tstart)
 
         #14-APR-2018
-        burst_index = np.int(np.around(len(ifg.bursts)/2))
+        burst_index = int(np.around(len(ifg.bursts)/2))
         orbit = ifg.bursts[burst_index].orbit
         peg = orbit.interpolateOrbit(tmid, method='hermite')
 
@@ -854,7 +864,7 @@ def snaphuUnwrap(self, xmlDirname, wrapName, corrfile, unwrapName, nrlks, nalks,
     azimuthLooks = nalks
     azfact = 0.8
     rngfact = 0.8
-    corrLooks = rangeLooks * azimuthLooks/(azfact*rngfact) 
+    corrLooks = rangeLooks * azimuthLooks/(azfact*rngfact)
     maxComponents = 20
 
     snp = Snaphu()
@@ -968,8 +978,8 @@ def multilook_unw(self, ionParam, mergedDirname):
             os.rename(filename0, filename)
 
         #multi-looking
-        nrlks = np.int(np.around(ionParam.numberRangeLooks / ionParam.numberRangeLooks0))
-        nalks = np.int(np.around(ionParam.numberAzimuthLooks / ionParam.numberAzimuthLooks0))
+        nrlks = int(np.around(ionParam.numberRangeLooks / ionParam.numberRangeLooks0))
+        nalks = int(np.around(ionParam.numberAzimuthLooks / ionParam.numberAzimuthLooks0))
         #coherence
         if dirx == ionParam.lowerDirname:
             corName0 = os.path.join(oridir, self._insar.correlationFilename)
@@ -977,15 +987,15 @@ def multilook_unw(self, ionParam, mergedDirname):
             corimg.load(corName0 + '.xml')
             width = corimg.width
             length = corimg.length
-            widthNew = np.int(width / nrlks)
-            lengthNew = np.int(length / nalks)
+            widthNew = int(width / nrlks)
+            lengthNew = int(length / nalks)
             cor0 = (np.fromfile(corName0, dtype=np.float32).reshape(length*2, width))[1:length*2:2, :]
             amp0 = (np.fromfile(corName0, dtype=np.float32).reshape(length*2, width))[0:length*2:2, :]
             wgt = cor0**2
             a = multilook(wgt, nalks, nrlks)
             b = multilook(cor0, nalks, nrlks)
             c = multilook(amp0**2, nalks, nrlks)
-            d = multilook((cor0!=0).astype(np.int), nalks, nrlks)
+            d = multilook((cor0!=0).astype(int), nalks, nrlks)
             #coherence after multiple looking
             cor = np.zeros((lengthNew*2, widthNew), dtype=np.float32)
             cor[0:lengthNew*2:2, :] = np.sqrt(c / (d + (d==0)))
@@ -1034,8 +1044,8 @@ def multilook_unw(self, ionParam, mergedDirname):
     lowerint = np.fromfile(lowerIntName, dtype=np.complex64).reshape(lengthNew, widthNew)
     upperint = np.fromfile(upperIntName, dtype=np.complex64).reshape(lengthNew, widthNew)
     cor = np.zeros((lengthNew*2, widthNew), dtype=np.float32)
-    cor[0:length*2:2, :] = np.sqrt( (np.absolute(lowerint)+np.absolute(upperint))/2.0 )
-    cor[1:length*2:2, :] = cal_coherence(lowerint*np.conjugate(upperint), win=3, edge=4)
+    cor[0:lengthNew*2:2, :] = np.sqrt( (np.absolute(lowerint)+np.absolute(upperint))/2.0 )
+    cor[1:lengthNew*2:2, :] = cal_coherence(lowerint*np.conjugate(upperint), win=3, edge=4)
     cor.astype(np.float32).tofile(corName)
 
 
@@ -1087,7 +1097,7 @@ def fit_surface(x, y, z, wgt, order):
     a = a1 * np.matlib.repmat(np.sqrt(wgt), 1, n)
     b = z * np.sqrt(wgt)
     c = np.linalg.lstsq(a, b, rcond=-1)[0]
-    
+
     #type: <class 'numpy.ndarray'>
     return c
 
@@ -1245,7 +1255,7 @@ def computeIonosphere(lowerUnw, upperUnw, cor, fl, fu, adjFlag, corThresholdAdj,
     #fl = SPEED_OF_LIGHT / ionParam.radarWavelengthLower
     #fu = SPEED_OF_LIGHT / ionParam.radarWavelengthUpper
     f0 = (fl + fu) / 2.0
-    
+
     #dispersive
     if dispersive == 0:
         ionos = fl * fu * (lowerUnw * fu - upperUnw * fl) / f0 / (fu**2 - fl**2)
@@ -1282,6 +1292,14 @@ def ionosphere(self, ionParam):
     upperAmp = (np.fromfile(upperUnwfile, dtype=np.float32).reshape(length*2, width))[0:length*2:2, :]
     cor = (np.fromfile(corfile, dtype=np.float32).reshape(length*2, width))[1:length*2:2, :]
     amp = np.sqrt(lowerAmp**2+upperAmp**2)
+
+    #masked out user-specified areas
+    if ionParam.maskedAreas != None:
+        maskedAreas = reformatMaskedAreas(ionParam.maskedAreas, length, width)
+        for area in maskedAreas:
+            lowerUnw[area[0]:area[1], area[2]:area[3]] = 0
+            upperUnw[area[0]:area[1], area[2]:area[3]] = 0
+            cor[area[0]:area[1], area[2]:area[3]] = 0
 
     #compute ionosphere
     fl = SPEED_OF_LIGHT / ionParam.radarWavelengthLower
@@ -1320,7 +1338,7 @@ def cal_cross_ab_ramp(swathList, width, numberRangeLooks, passDirection):
     numberRangeLooks: number of range looks in the processing of ionosphere estimation
     passDirection:    descending/ascending
     '''
-    
+
     #below is from processing chile_d156_160725(S1A)-160929(S1B)
     #empirical polynomial
     deg = 3
@@ -1341,15 +1359,15 @@ def cal_cross_ab_ramp(swathList, width, numberRangeLooks, passDirection):
     #getting x
     nswath = len(swathList)
     if nswath == 3:
-        width2 = np.int(width/numberRangeLooks)
+        width2 = int(width/numberRangeLooks)
         x = np.arange(width2) / (width2 - 1.0)
     else:
-        width2 = np.int(width/numberRangeLooks)
+        width2 = int(width/numberRangeLooks)
         #WARNING: what if the some swaths does not have bursts, and are not merged?
         #         here I just simply ignore this case
         offset = swath_offset[swathList[0]-1]
         x = offset / tnp + width / tnp * np.arange(width2) / (width2 - 1.0)
-        
+
     #calculate ramp
     y_fit = x * 0.0
     for i in range(deg+1):
@@ -1363,7 +1381,7 @@ def ionSwathBySwath(self, ionParam):
     This routine merge, unwrap and compute ionosphere swath by swath, and then
     adjust phase difference between adjacent swaths caused by relative range timing
     error between adjacent swaths.
-    
+
     This routine includes the following steps in the merged-swath processing:
     merge(self, ionParam)
     unwrap(self, ionParam)
@@ -1442,7 +1460,7 @@ def ionSwathBySwath(self, ionParam):
             ifg = self._insar.loadProduct( os.path.join(burstDirname, 'IW{0}.xml'.format(swath)))
             bst = [os.path.join(burstDirname, 'IW{0}'.format(swath), burstPattern%(x+1)) for x in range(minBurst, maxBurst)]
             #doing adjustment before use
-            adjustValidWithLooks([ifg], box, numberAzimuthLooks, numberRangeLooks, edge=0, avalid='strict', rvalid=np.int(np.around(numberRangeLooks/8.0)))
+            adjustValidWithLooks([ifg], box, numberAzimuthLooks, numberRangeLooks, edge=0, avalid='strict', rvalid=int(np.around(numberRangeLooks/8.0)))
             mergeBurstsVirtual([ifg], [bst], box, os.path.join(outputDirname, outputFilename+suffix))
 
             #take looks
@@ -1500,7 +1518,7 @@ def ionSwathBySwath(self, ionParam):
         #img.bands = 2
         #img.filename = corfile
         #img.renderHdr()
-        
+
         #img = isceobj.Image.createUnwImage()
         img = isceobj.createOffsetImage()
         img.setFilename(corfile)
@@ -1549,6 +1567,14 @@ def ionSwathBySwath(self, ionParam):
         cor = (np.fromfile(corfile, dtype=np.float32).reshape(length*2, width))[1:length*2:2, :]
         amp = np.sqrt(lowerAmp**2+upperAmp**2)
 
+        #masked out user-specified areas
+        if ionParam.maskedAreas != None:
+            maskedAreas = reformatMaskedAreas(ionParam.maskedAreas, length, width)
+            for area in maskedAreas:
+                lowerUnw[area[0]:area[1], area[2]:area[3]] = 0
+                upperUnw[area[0]:area[1], area[2]:area[3]] = 0
+                cor[area[0]:area[1], area[2]:area[3]] = 0
+
         #compute ionosphere
         fl = SPEED_OF_LIGHT / ionParam.radarWavelengthLower
         fu = SPEED_OF_LIGHT / ionParam.radarWavelengthUpper
@@ -1585,7 +1611,7 @@ def ionSwathBySwath(self, ionParam):
         else:
             print('number of samples available for adjustment in the overlap area: {}'.format(index[0].size))
             #diff = np.mean((ionosList[1] - adjdata)[index], dtype=np.float64)
-            
+
             #use weighted mean instead
             wgt = corList[1][index]**14
             diff = np.sum((ionosList[1] - adjdata)[index] * wgt / np.sum(wgt, dtype=np.float64), dtype=np.float64)
@@ -1602,10 +1628,10 @@ def ionSwathBySwath(self, ionParam):
         for j in range(nBurst):
 
             #index after multi-looking in merged image, index starts from 1
-            first_line = np.int(np.around((burstValidBox[i][j][0] - 1) / numberAzimuthLooks + 1))
-            last_line = np.int(np.around(burstValidBox[i][j][1] / numberAzimuthLooks))
-            first_sample = np.int(np.around((burstValidBox[i][j][2] - 1) / numberRangeLooks + 1))
-            last_sample = np.int(np.around(burstValidBox[i][j][3] / numberRangeLooks))
+            first_line = int(np.around((burstValidBox[i][j][0] - 1) / numberAzimuthLooks + 1))
+            last_line = int(np.around(burstValidBox[i][j][1] / numberAzimuthLooks))
+            first_sample = int(np.around((burstValidBox[i][j][2] - 1) / numberRangeLooks + 1))
+            last_sample = int(np.around(burstValidBox[i][j][3] / numberRangeLooks))
 
             corMerged[first_line-1:last_line-1+1, first_sample-1:last_sample-1+1] = \
                 corList[i][first_line-1:last_line-1+1, first_sample-1:last_sample-1+1]
@@ -1676,7 +1702,7 @@ def computeDopplerOffset(burst, firstline, lastline, firstcolumn, lastcolumn, nr
     '''
 
     Vs = np.linalg.norm(burst.orbit.interpolateOrbit(burst.sensingMid, method='hermite').getVelocity())
-    Ks =   2 * Vs * burst.azimuthSteeringRate / burst.radarWavelength 
+    Ks =   2 * Vs * burst.azimuthSteeringRate / burst.radarWavelength
 
     #firstcolumn, lastcolumn: index starts from 1
     rng = multilookIndex(firstcolumn-1, lastcolumn-1, nrlks) * burst.rangePixelSize + burst.startingRange
@@ -1694,7 +1720,7 @@ def computeDopplerOffset(burst, firstline, lastline, firstcolumn, lastcolumn, nr
     #center doppler frequency due to squint
     dopplerOffset2 = (f_etac[None,:] / Ka[None,:]) / (burst.azimuthTimeInterval * nalks)
     dopplerOffset = dopplerOffset1 + dopplerOffset2
- 
+
     return (dopplerOffset, Ka)
 
 
@@ -1722,7 +1748,7 @@ def grd2ion(self, ionParam):
     reference = self._insar.loadProduct( os.path.join(self._insar.referenceSlcProduct, 'IW{0}.xml'.format(swathList[0])))
     minBurst, maxBurst = self._insar.commonReferenceBurstLimits(swathList[0]-1)
     #no problem with this index at all
-    midBurst = np.int(np.around((minBurst+ maxBurst-1) / 2.0))
+    midBurst = int(np.around((minBurst+ maxBurst-1) / 2.0))
     masBurst = reference.bursts[midBurst]
     #satellite height
     satHeight = np.linalg.norm(masBurst.orbit.interpolateOrbit(masBurst.sensingMid, method='hermite').getPosition())
@@ -1758,12 +1784,12 @@ def grd2ion(self, ionParam):
                 offset = ratio * dopplerOffset
 
                 #   0              1               2              3
-                #firstlineAdj, lastlineAdj, firstcolumnAdj, lastcolumnAdj, 
+                #firstlineAdj, lastlineAdj, firstcolumnAdj, lastcolumnAdj,
                 #after multiplication, index starts from 1
-                firstline = np.int(np.around((burstValidBox[i][j][0] - 1) / ionParam.numberAzimuthLooks + 1))
-                lastline = np.int(np.around(burstValidBox[i][j][1] / ionParam.numberAzimuthLooks))
-                firstcolumn = np.int(np.around((burstValidBox[i][j][2] - 1) / ionParam.numberRangeLooks + 1))
-                lastcolumn = np.int(np.around(burstValidBox[i][j][3] / ionParam.numberRangeLooks))
+                firstline = int(np.around((burstValidBox[i][j][0] - 1) / ionParam.numberAzimuthLooks + 1))
+                lastline = int(np.around(burstValidBox[i][j][1] / ionParam.numberAzimuthLooks))
+                firstcolumn = int(np.around((burstValidBox[i][j][2] - 1) / ionParam.numberRangeLooks + 1))
+                lastcolumn = int(np.around(burstValidBox[i][j][3] / ionParam.numberRangeLooks))
 
                 #extract image
                 burstImage = band[firstline-1:lastline, firstcolumn-1:lastcolumn]
@@ -1776,9 +1802,9 @@ def grd2ion(self, ionParam):
                     index = index0 + offset[:, k]
                     value = burstImage[:, k]
                     f = interp1d(index, value, kind='cubic', fill_value="extrapolate")
-                    
-                    index_min = np.int(np.around(np.amin(index)))
-                    index_max = np.int(np.around(np.amax(index)))
+
+                    index_min = int(np.around(np.amin(index)))
+                    index_max = int(np.around(np.amax(index)))
                     flag = index0 * 0.0
                     flag[index_min:index_max+1] = 1.0
                     #replace the original column with new column in burstImage
@@ -1843,11 +1869,11 @@ def adaptive_gaussian(ionos, wgt, size_max, size_min):
     #sigma of window size: size_max
     sigma = size_max / 2.0
     for i in range(size_num):
-        size2 = np.int(np.around(size[i]))
+        size2 = int(np.around(size[i]))
         if size2 % 2 == 0:
             size2 += 1
         if (i+1) % 10 == 0:
-            print('min win: %4d, max win: %4d, current win: %4d'%(np.int(np.around(size_min)), np.int(np.around(size_max)), size2))
+            print('min win: %4d, max win: %4d, current win: %4d'%(int(np.around(size_min)), int(np.around(size_max)), size2))
         g2d = gaussian(size2, sigma*size2/size_max, scale=1.0)
         scale = ss.fftconvolve(wgt, g2d, mode='same')
         flt[:, :, i] = ss.fftconvolve(ionos*wgt, g2d, mode='same') / (scale + (scale==0))
@@ -1861,7 +1887,7 @@ def adaptive_gaussian(ionos, wgt, size_max, size_min):
     std_mv = np.mean(std[np.nonzero(std!=0)], dtype=np.float64)
     diff_max = np.amax(np.absolute(std - std_mv)) + std_mv + 1
     std[np.nonzero(std==0)] = diff_max
-    
+
     index = np.nonzero(np.ones((length, width))) + ((np.argmin(np.absolute(std - std_mv), axis=2)).reshape(length*width), )
     out = flt[index]
     out = out.reshape((length, width))
@@ -1923,6 +1949,13 @@ def filt_gaussian(self, ionParam):
     cor = (np.fromfile(corfile, dtype=np.float32).reshape(length*2, width))[1:length*2:2, :]
     amp = (np.fromfile(ionfile, dtype=np.float32).reshape(length*2, width))[0:length*2:2, :]
 
+    #masked out user-specified areas
+    if ionParam.maskedAreas != None:
+        maskedAreas = reformatMaskedAreas(ionParam.maskedAreas, length, width)
+        for area in maskedAreas:
+            ion[area[0]:area[1], area[2]:area[3]] = 0
+            cor[area[0]:area[1], area[2]:area[3]] = 0
+
     ########################################################################################
     #AFTER COHERENCE IS RESAMPLED AT grd2ion, THERE ARE SOME WIRED VALUES
     cor[np.nonzero(cor<0)] = 0.0
@@ -1936,7 +1969,7 @@ def filt_gaussian(self, ionParam):
         ion_fit *= 0
 
     ion -= ion_fit * (ion!=0)
-    
+
     #minimize the effect of low coherence pixels
     #cor[np.nonzero( (cor<0.85)*(cor!=0) )] = 0.00001
     #filt = adaptive_gaussian(ion, cor, size_max, size_min)
@@ -1962,7 +1995,7 @@ def ionosphere_shift(self, ionParam):
     #################################################
     #SET PARAMETERS HERE
     #gaussian filtering window size
-    #size = np.int(np.around(width / 12.0))
+    #size = int(np.around(width / 12.0))
     #size = ionParam.ionshiftFilteringWinsize
     size_max = ionParam.ionshiftFilteringWinsizeMax
     size_min = ionParam.ionshiftFilteringWinsizeMin
@@ -2089,7 +2122,7 @@ def ionosphere_shift(self, ionParam):
     reference = self._insar.loadProduct( os.path.join(self._insar.referenceSlcProduct, 'IW{0}.xml'.format(swathList[0])))
     minBurst, maxBurst = self._insar.commonReferenceBurstLimits(swathList[0]-1)
     #no problem with this index at all
-    midBurst = np.int(np.around((minBurst+ maxBurst-1) / 2.0))
+    midBurst = int(np.around((minBurst+ maxBurst-1) / 2.0))
     masBurst = reference.bursts[midBurst]
 
     #shift casued by ionosphere [unit: masBurst.azimuthTimeInterval]
@@ -2150,13 +2183,13 @@ def ion2grd(self, ionParam):
         if azshiftFlag == 2:
             f2 = interp1d(indexRange2, dion[i, :], kind='cubic', fill_value="extrapolate")
             dionOneRangeLook[i, :] = f2(indexRange)
- 
+
     #use the satellite height of the mid burst of first swath of reference acquistion
     swathList = self._insar.getValidSwathList(self.swaths)
     reference = self._insar.loadProduct( os.path.join(self._insar.referenceSlcProduct, 'IW{0}.xml'.format(swathList[0])))
     minBurst, maxBurst = self._insar.commonReferenceBurstLimits(swathList[0]-1)
     #no problem with this index at all
-    midBurst = np.int(np.around((minBurst+ maxBurst-1) / 2.0))
+    midBurst = int(np.around((minBurst+ maxBurst-1) / 2.0))
     masBurst = reference.bursts[midBurst]
     #satellite height
     satHeight = np.linalg.norm(masBurst.orbit.interpolateOrbit(masBurst.sensingMid, method='hermite').getPosition())
@@ -2225,10 +2258,10 @@ def ion2grd(self, ionParam):
 
             #calculate phase caused by ionospheric shift and non-zero center frequency
             #index after multi-looking in merged image, index starts from 1
-            first_line = np.int(np.around((burstValidBox[i][j][0] - 1) / ionParam.numberAzimuthLooks + 1))
-            last_line = np.int(np.around(burstValidBox[i][j][1] / ionParam.numberAzimuthLooks))
-            first_sample = np.int(np.around((burstValidBox[i][j][2] - 1) / ionParam.numberRangeLooks + 1))
-            last_sample = np.int(np.around(burstValidBox[i][j][3] / ionParam.numberRangeLooks))
+            first_line = int(np.around((burstValidBox[i][j][0] - 1) / ionParam.numberAzimuthLooks + 1))
+            last_line = int(np.around(burstValidBox[i][j][1] / ionParam.numberAzimuthLooks))
+            first_sample = int(np.around((burstValidBox[i][j][2] - 1) / ionParam.numberRangeLooks + 1))
+            last_sample = int(np.around(burstValidBox[i][j][3] / ionParam.numberRangeLooks))
 
             burstDionMultilook = dion[first_line-1:last_line-1+1, first_sample-1:last_sample-1+1]
             #for avoid areas with strong decorrelation like water
@@ -2271,14 +2304,14 @@ def ion2grd(self, ionParam):
 def multilook(data, nalks, nrlks):
     '''
     doing multiple looking
-    
+
     ATTENTION:
     NO AVERAGING BY DIVIDING THE NUMBER OF TOTAL SAMPLES IS DONE.
     '''
 
     (length, width)=data.shape
-    width2 = np.int(width/nrlks)
-    length2 = np.int(length/nalks)
+    width2 = int(width/nrlks)
+    length2 = int(length/nalks)
 
     tmp2 = np.zeros((length2, width), dtype=data.dtype)
     data2 = np.zeros((length2, width2), dtype=data.dtype)
@@ -2305,7 +2338,7 @@ def get_overlap_box(swath, minBurst, maxBurst):
         curBurst = swath.bursts[ii]
 
         #overlap lines, line index starts from 1
-        offLine = np.int(np.round( (curBurst.sensingStart - topBurst.sensingStart).total_seconds() / curBurst.azimuthTimeInterval))
+        offLine = int(np.round( (curBurst.sensingStart - topBurst.sensingStart).total_seconds() / curBurst.azimuthTimeInterval))
         firstLineTop = topBurst.firstValidLine + 1
         lastLineTop = topBurst.firstValidLine + topBurst.numValidLines
         firstLineCur = offLine + curBurst.firstValidLine + 1
@@ -2318,7 +2351,7 @@ def get_overlap_box(swath, minBurst, maxBurst):
         lastLine = lastLineTop
 
         #overlap samples, sample index starts from 1
-        offSample = np.int(np.round(       (curBurst.startingRange - topBurst.startingRange) / curBurst.rangePixelSize         ))
+        offSample = int(np.round(       (curBurst.startingRange - topBurst.startingRange) / curBurst.rangePixelSize         ))
         firstSampleTop = topBurst.firstValidSample + 1
         lastSampleTop = topBurst.firstValidSample + topBurst.numValidSamples
         firstSampleCur = offSample + curBurst.firstValidSample + 1
@@ -2358,7 +2391,7 @@ def esd(self, ionParam):
 
         if nBurst <= 1:
             continue
-    
+
         ####Load relevant products
         reference = self._insar.loadProduct( os.path.join(self._insar.referenceSlcProduct, 'IW{0}.xml'.format(swath)))
         secondary = self._insar.loadProduct( os.path.join(self._insar.fineCoregDirname, 'IW{0}.xml'.format(swath)))
@@ -2367,21 +2400,21 @@ def esd(self, ionParam):
         for ii in range(minBurst, maxBurst):
             jj = ii - minBurst
             ####Process the top bursts
-            masBurst = reference.bursts[ii] 
+            masBurst = reference.bursts[ii]
             slvBurst = secondary.bursts[jj]
             adjustValidLineSample(masBurst,slvBurst)
         overlapBox = get_overlap_box(reference, minBurst, maxBurst)
-        
+
         #using esd to calculate mis-registration
         misreg = np.array([])
         totalSamples = 0
         for ii in range(minBurst+1, maxBurst):
             jj = ii - minBurst
             ####Process the top bursts
-            masBurstTop = reference.bursts[ii-1] 
+            masBurstTop = reference.bursts[ii-1]
             slvBurstTop = secondary.bursts[jj-1]
 
-            masBurstCur = reference.bursts[ii] 
+            masBurstCur = reference.bursts[ii]
             slvBurstCur = secondary.bursts[jj]
 
             #get info
@@ -2439,7 +2472,7 @@ def esd(self, ionParam):
         for ii in range(minBurst, maxBurst):
             jj = ii - minBurst
             ####Process the top bursts
-            masBurst = reference.bursts[ii] 
+            masBurst = reference.bursts[ii]
             slvBurst = secondary.bursts[jj]
 
             ionname = os.path.join(ionParam.ionDirname, ionParam.ionBurstDirname, 'IW{0}'.format(swath), '%s_%02d.ion'%('burst',ii+1))
@@ -2479,7 +2512,7 @@ def esd_noion(self, ionParam):
 
         if nBurst <= 1:
             continue
-    
+
         ####Load relevant products
         reference = self._insar.loadProduct( os.path.join(self._insar.referenceSlcProduct, 'IW{0}.xml'.format(swath)))
         secondary = self._insar.loadProduct( os.path.join(self._insar.fineCoregDirname, 'IW{0}.xml'.format(swath)))
@@ -2488,21 +2521,21 @@ def esd_noion(self, ionParam):
         for ii in range(minBurst, maxBurst):
             jj = ii - minBurst
             ####Process the top bursts
-            masBurst = reference.bursts[ii] 
+            masBurst = reference.bursts[ii]
             slvBurst = secondary.bursts[jj]
             adjustValidLineSample(masBurst,slvBurst)
         overlapBox = get_overlap_box(reference, minBurst, maxBurst)
-        
+
         #using esd to calculate mis-registration
         misreg = np.array([])
         totalSamples = 0
         for ii in range(minBurst+1, maxBurst):
             jj = ii - minBurst
             ####Process the top bursts
-            masBurstTop = reference.bursts[ii-1] 
+            masBurstTop = reference.bursts[ii-1]
             slvBurstTop = secondary.bursts[jj-1]
 
-            masBurstCur = reference.bursts[ii] 
+            masBurstCur = reference.bursts[ii]
             slvBurstCur = secondary.bursts[jj]
 
             #get info
@@ -2564,12 +2597,12 @@ def esd_noion(self, ionParam):
         for ii in range(minBurst, maxBurst):
             jj = ii - minBurst
             ####Process the top bursts
-            masBurst = reference.bursts[ii] 
+            masBurst = reference.bursts[ii]
             slvBurst = secondary.bursts[jj]
 
             #ionname = os.path.join(ionParam.ionDirname, ionParam.ionBurstDirname, 'IW{0}'.format(swath), '%s_%02d.ion'%('burst',ii+1))
             #ion = np.fromfile(ionname, dtype=np.float32).reshape(masBurst.numberOfLines, masBurst.numberOfSamples)
-            
+
             (dopplerOffset, Ka) = computeDopplerOffset(masBurst, 1, masBurst.numberOfLines, 1, masBurst.numberOfSamples, nrlks=1, nalks=1)
             centerFrequency = dopplerOffset * Ka[None,:] * (masBurst.azimuthTimeInterval)
 
